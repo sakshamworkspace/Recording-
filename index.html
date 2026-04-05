@@ -53,100 +53,165 @@ button {
   border-radius:10px;
   font-weight:bold;
   cursor:pointer;
+  font-size:16px;
+  transition: all 0.3s ease;
 }
 
-#startBtn {background:red;color:white;}
-#stopBtn {background:white;color:black;display:none;}
+#startBtn {background:var(--primary);color:white;}
+#stopBtn {background:#00ff88;color:black;display:none;}
+#startBtn:hover {background:#cc1818;}
+#stopBtn:hover {background:#00cc6a;}
 
 .status {
   text-align:center;
-  margin-top:10px;
-  font-size:13px;
-  color:#aaa;
+  margin-top:15px;
+  font-size:14px;
+  padding:10px;
+  border-radius:8px;
+  background:rgba(255,255,255,0.05);
 }
+
+.recording {background:rgba(255,30,30,0.3) !important;}
 </style>
 </head>
 
 <body>
 
 <div class="container">
+  <div class="video-box">
+    <iframe 
+      src="https://b-player2.pages.dev/p1?id=skynz-4k"
+      allow="autoplay; encrypted-media; fullscreen; display-capture"
+      allowfullscreen
+      referrerpolicy="no-referrer">
+    </iframe>
+  </div>
 
-<div class="video-box">
-<iframe 
-  src="https://b-player2.pages.dev/p1?id=skynz-4k"
-  allow="autoplay; encrypted-media; fullscreen"
-  allowfullscreen
-  referrerpolicy="no-referrer">
-</iframe>
-</div>
+  <button id="startBtn">🎥 Start Screen Recording</button>
+  <button id="stopBtn">⏹️ Stop & Save Recording</button>
 
-<button id="startBtn">Start Recording</button>
-<button id="stopBtn">Stop & Save</button>
-
-<div class="status" id="status">Ready</div>
-
+  <div class="status" id="status">Ready to record your screen</div>
 </div>
 
 <script>
-let recorder, chunks=[];
+let recorder = null;
+let chunks = [];
+let stream = null;
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const status = document.getElementById("status");
 
 startBtn.onclick = async () => {
-
-  // ✅ Check support FIRST
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    status.innerText = "❌ Not supported on this device";
-    return;
-  }
-
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video:true,
-      audio:true
+    // Check browser support
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      status.innerText = "❌ Screen recording not supported in this browser";
+      status.className = "status";
+      return;
+    }
+
+    // Request screen capture with audio
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        mediaSource: 'screen'
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
     });
 
-    recorder = new MediaRecorder(stream);
+    // Initialize recorder
     chunks = [];
+    recorder = new MediaRecorder(stream, {
+      mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9') 
+        ? 'video/webm;codecs=vp9' 
+        : 'video/webm'
+    });
 
-    recorder.ondataavailable = e => {
-      if (e.data.size > 0) chunks.push(e.data);
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data);
+      }
     };
 
     recorder.onstop = () => {
-      const blob = new Blob(chunks, {type:"video/webm"});
+      // Create and download video
+      const blob = new Blob(chunks, { type: 'video/webm' });
       const url = URL.createObjectURL(blob);
-
+      
       const a = document.createElement("a");
       a.href = url;
-      a.download = "CricxCrate_recording.webm";
+      a.download = `CricxCrate_Recording_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.webm`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
-      status.innerText = "✅ Saved successfully";
+      // Reset UI
+      resetUI();
+      status.innerText = "✅ Recording saved successfully!";
+      status.className = "status";
     };
 
-    recorder.start();
+    recorder.onerror = (event) => {
+      console.error('Recorder error:', event);
+      status.innerText = "❌ Recording failed";
+      resetUI();
+    };
 
-    status.innerText = "🔴 Recording...";
-
-    startBtn.style.display="none";
-    stopBtn.style.display="block";
-
+    // Start recording
+    recorder.start(100); // Collect data every 100ms for smoother recording
+    
+    // Update UI
+    startBtn.style.display = "none";
+    stopBtn.style.display = "block";
+    status.innerText = "🔴 Recording... (Click STOP to save)";
+    status.className = "status recording";
+    
   } catch (err) {
-    status.innerText = "❌ Permission denied / Not supported";
-    console.log(err);
+    console.error('Error:', err);
+    if (err.name === 'NotAllowedError') {
+      status.innerText = "❌ Permission denied. Please allow screen capture.";
+    } else if (err.name === 'NotFoundError') {
+      status.innerText = "❌ No screen capture source found.";
+    } else {
+      status.innerText = "❌ Failed to start recording: " + err.message;
+    }
+    status.className = "status";
   }
 };
 
 stopBtn.onclick = () => {
-  recorder.stop();
-  recorder.stream.getTracks().forEach(t => t.stop());
-
-  startBtn.style.display="block";
-  stopBtn.style.display="none";
+  if (recorder && recorder.state === 'recording') {
+    recorder.stop();
+  }
+  
+  // Stop all tracks
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
 };
+
+function resetUI() {
+  startBtn.style.display = "block";
+  stopBtn.style.display = "none";
+}
+
+// Handle page visibility change (pause/resume)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && recorder?.state === 'recording') {
+    console.log('Page hidden, pausing recording...');
+    recorder.pause();
+  } else if (!document.hidden && recorder?.state === 'paused') {
+    console.log('Page visible, resuming recording...');
+    recorder.resume();
+  }
+});
+
+console.log("CricxCrate Recorder PRO loaded successfully!");
 </script>
 
 </body>
